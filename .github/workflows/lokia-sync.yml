@@ -1,0 +1,104 @@
+name: Lokia Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Single month (YYYY-MM). Ignored when month_from+month_to are set.'
+        required: false
+        default: ''
+      month_from:
+        description: 'Range start (YYYY-MM) — use with month_to for bulk import'
+        required: false
+        default: ''
+      month_to:
+        description: 'Range end (YYYY-MM) — use with month_from for bulk import'
+        required: false
+        default: ''
+      max_fetch:
+        description: 'Max documents to fetch per month (default 3000, use 0 for unlimited)'
+        required: false
+        default: '3000'
+      mode:
+        description: 'sync | backfill (backfill re-fetches BranchId for cached Packeta docs, then re-aggregates)'
+        required: false
+        default: 'sync'
+      backfill_country:
+        description: 'Country ISO for backfill mode (e.g. RO, or ALL)'
+        required: false
+        default: 'RO'
+  schedule:
+    # Daily at 18:00 UTC (20:00 CET) Mon–Fri — fetches up to 3000 new docs per run
+    - cron: '0 18 * * 1-5'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run Lokia sync
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          LOKIA_API_USER: ${{ secrets.LOKIA_API_USER }}
+          LOKIA_API_PASSWORD: ${{ secrets.LOKIA_API_PASSWORD }}
+        run: |
+          MAX="${{ github.event.inputs.max_fetch }}"
+          if [ -z "$MAX" ]; then MAX="3000"; fi
+
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then MODE="sync"; fi
+
+          # Helper: advance YYYY-MM by one month
+          next_month() {
+            local y=${1:0:4} m=${1:5:2}
+            m=$((10#$m + 1))
+            if [ $m -gt 12 ]; then m=1; y=$((y + 1)); fi
+            printf "%04d-%02d" $y $m
+          }
+
+          run_month() {
+            local mo="$1"
+            echo "=== Syncing $mo (max_fetch=$MAX) ==="
+            if [ "$MAX" = "0" ]; then
+              node scripts/lokia-sync.mjs "$mo"
+            else
+              node scripts/lokia-sync.mjs "$mo" "$MAX"
+            fi
+          }
+
+          FROM="${{ github.event.inputs.month_from }}"
+          TO="${{ github.event.inputs.month_to }}"
+
+          # Backfill mode: re-fetch BranchId for cached Packeta docs, then force
+          # aggregate-only (MAX=0) so the months below are re-split by sub-carrier.
+          if [ "$MODE" = "backfill" ]; then
+            CTRY="${{ github.event.inputs.backfill_country }}"
+            if [ -z "$CTRY" ]; then CTRY="RO"; fi
+            echo "=== BranchId backfill: $CTRY ==="
+            node scripts/lokia-backfill-branch.mjs "$CTRY"
+            MAX="0"
+            if [ -z "$FROM" ] || [ -z "$TO" ]; then FROM="2026-01"; TO=$(date +%Y-%m); fi
+          fi
+
+          if [ -n "$FROM" ] && [ -n "$TO" ]; then
+            # Range mode: compare YYYY-MM as integers (remove dash: 2026-01 → 202601)
+            cur="$FROM"
+            while [ "${cur//-/}" -le "${TO//-/}" ]; do
+              run_month "$cur"
+              cur=$(next_month "$cur")
+            done
+          else
+            # Single month mode
+            MONTH="${{ github.event.inputs.month }}"
+            if [ -z "$MONTH" ]; then MONTH=$(date +%Y-%m); fi
+            run_month "$MONTH"
+          fi

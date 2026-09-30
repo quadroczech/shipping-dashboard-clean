@@ -1,0 +1,13 @@
+{
+  "regions": ["fra1"],
+  "crons": [
+    {
+      "path": "/api/cron/exchange-rates",
+      "schedule": "0 15 * * 1-5"
+    },
+    {
+      "path": "/api/cron/lokia-sync",
+      "schedule": "0 18 * * 1-5"
+    }
+  ]
+}
