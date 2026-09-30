@@ -152,8 +152,3 @@ na veřejnou adresu:
 
 Do repozitáře nikdy nedávejte reálné klíče ani hesla; používejte `.env.local` a tajné hodnoty
 hostingu / GitHub Actions.
-
-## Použití
-
-Interní nástroj sdílený v rámci skupiny. Repozitář nemá open-source licenci – kód slouží ke
-společnému používání a úpravám uvnitř skupiny a není určen k dalšímu šíření.
